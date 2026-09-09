@@ -167,4 +167,31 @@ describe('loadInstructionTranscriptEvents', () => {
     expect(listEvents).toHaveBeenCalledTimes(2);
     expect(events).toHaveLength(2);
   });
+
+  it('keeps paging past tool-heavy windows until user text is in range', async () => {
+    const filler: SessionEventItem = {
+      turn_id: 'tool',
+      event: {
+        type: EventType.MODEL_MESSAGE,
+        id: 'tool-msg',
+        thread_id: MAIN_THREAD_ID,
+        created_at: '2026-08-01T00:00:02.000Z',
+        content: 'calling the ticket API',
+      },
+    };
+    const listEvents = jest.fn();
+    for (let i = 0; i < 4; i += 1) {
+      listEvents.mockResolvedValueOnce({
+        data: [{ ...filler, event: { ...filler.event, id: `tool-${i}` } }],
+        pagination: { next_page_token: `p${i + 2}` },
+      });
+    }
+    listEvents.mockResolvedValueOnce({
+      data: richTranscript().slice(1),
+      pagination: {},
+    });
+    const events = await loadInstructionTranscriptEvents({ listEvents });
+    expect(listEvents).toHaveBeenCalledTimes(5);
+    expect(events).toHaveLength(5);
+  });
 });

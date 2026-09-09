@@ -14,9 +14,18 @@ import {
   assertTranscriptHasInstructionSignal,
   buildInstructionGenerationPrompt,
   extractChatTranscript,
+  MIN_TRANSCRIPT_CHARS,
   parseGeneratedInstructions,
   sourcesFromTranscript,
 } from './chatInstructionTranscript';
+
+const MAX_EVENT_PAGES = 20;
+
+function userTranscriptChars(events: readonly SessionEventItem[]): number {
+  return extractChatTranscript(events)
+    .filter(line => line.role === 'user')
+    .reduce((sum, line) => sum + line.text.length, 0);
+}
 
 function textFromLlmContent(content: unknown): string {
   if (typeof content === 'string') {
@@ -49,7 +58,7 @@ export async function loadInstructionTranscriptEvents(session: {
 }): Promise<SessionEventItem[]> {
   const events: SessionEventItem[] = [];
   let pageToken: string | undefined;
-  for (let page = 0; page < 4; page += 1) {
+  for (let page = 0; page < MAX_EVENT_PAGES; page += 1) {
     const result = await session.listEvents({
       limit: 100,
       ...(pageToken === undefined ? {} : { page_token: pageToken }),
@@ -57,6 +66,10 @@ export async function loadInstructionTranscriptEvents(session: {
     events.push(...result.data);
     const next = result.pagination.next_page_token;
     if (next === undefined || next.length === 0) {
+      break;
+    }
+    // Tool-heavy newest pages can bury the user turns the short-chat gate counts.
+    if (userTranscriptChars(events) >= MIN_TRANSCRIPT_CHARS) {
       break;
     }
     pageToken = next;
