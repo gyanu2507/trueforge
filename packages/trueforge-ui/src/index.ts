@@ -32,7 +32,8 @@ export type {
 
 export { BottomSheet } from './atoms/primitives/BottomSheet.js';
 export type { BottomSheetProps } from './atoms/primitives/BottomSheet.js';
-export type { ButtonProps, ButtonSize, ButtonVariant } from './atoms/primitives/Button.js';
+export { Button } from './atoms/primitives/Button.js';
+export type { ButtonProps, ButtonSize, ButtonVariant, FixedVariantButtonProps } from './atoms/primitives/Button.js';
 export { CenteredModal } from './atoms/primitives/CenteredModal.js';
 export type { CenteredModalProps } from './atoms/primitives/CenteredModal.js';
 export type { IconButtonProps } from './atoms/primitives/IconButton.js';
@@ -464,6 +465,8 @@ export { AgentConfigEditors } from './atoms/draft/AgentConfigEditors.js';
 export type { AgentConfigEditor, AgentConfigEditorsProps } from './atoms/draft/AgentConfigEditors.js';
 export { AgentConfigPanel, AgentConfigSection } from './atoms/draft/AgentConfigPanel.js';
 export type { AgentConfigPanelProps } from './atoms/draft/AgentConfigPanel.js';
+export { AgentInstructionsDrawer } from './atoms/draft/AgentInstructionsDrawer.js';
+export type { AgentInstructionsDrawerProps } from './atoms/draft/AgentInstructionsDrawer.js';
 export { AgentMcpEditorContent } from './atoms/draft/AgentMcpEditorContent.js';
 export type { AgentMcpEditorContentProps } from './atoms/draft/AgentMcpEditorContent.js';
 export { AgentModelConfigModal } from './atoms/draft/AgentModelConfigModal.js';
@@ -476,10 +479,10 @@ export { AgentResourceConfigModal } from './atoms/draft/AgentResourceConfigModal
 export type { AgentResourceConfigModalProps } from './atoms/draft/AgentResourceConfigModal.js';
 export { AgentResourceEditorContent } from './atoms/draft/AgentResourceEditorContent.js';
 export type { AgentResourceEditorContentProps } from './atoms/draft/AgentResourceEditorContent.js';
+export { AgentRuntimeConfigDrawer } from './atoms/draft/AgentRuntimeConfigDrawer.js';
+export type { AgentRuntimeConfigDrawerProps } from './atoms/draft/AgentRuntimeConfigDrawer.js';
 export { AgentRuntimeConfigFields } from './atoms/draft/AgentRuntimeConfigFields.js';
 export type { AgentRuntimeConfigFieldsProps } from './atoms/draft/AgentRuntimeConfigFields.js';
-export { AgentRuntimeConfigModal } from './atoms/draft/AgentRuntimeConfigModal.js';
-export type { AgentRuntimeConfigModalProps } from './atoms/draft/AgentRuntimeConfigModal.js';
 export { AgentRuntimeEditorContent } from './atoms/draft/AgentRuntimeEditorContent.js';
 export type { AgentRuntimeEditorContentProps } from './atoms/draft/AgentRuntimeEditorContent.js';
 export { AgentSkillsEditorContent } from './atoms/draft/AgentSkillsEditorContent.js';

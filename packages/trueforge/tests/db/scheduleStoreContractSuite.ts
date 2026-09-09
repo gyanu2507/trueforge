@@ -540,6 +540,7 @@ export function runScheduleStoreContractSuite(deps: {
       limit: 25,
       page_token: undefined,
       agent_names: [agentA.name],
+      created_by_or_agent_ids: undefined,
     });
     expect(forA.data.map(row => row.id)).toEqual([newer.schedule.id, older.schedule.id]);
     expect(forA.data.every(row => row.agent_name === agentA.name)).toBe(true);
@@ -550,6 +551,7 @@ export function runScheduleStoreContractSuite(deps: {
       limit: 25,
       page_token: undefined,
       agent_names: [agentB.name],
+      created_by_or_agent_ids: undefined,
     });
     expect(forB.data.map(row => row.id)).toEqual([otherAgent.schedule.id]);
 
@@ -558,6 +560,7 @@ export function runScheduleStoreContractSuite(deps: {
       limit: 25,
       page_token: undefined,
       agent_names: [agentA.name, agentB.name],
+      created_by_or_agent_ids: undefined,
     });
     expect(forBoth.data.map(row => row.id)).toEqual([otherAgent.schedule.id, newer.schedule.id, older.schedule.id]);
 
@@ -566,6 +569,7 @@ export function runScheduleStoreContractSuite(deps: {
       limit: 25,
       page_token: undefined,
       agent_names: undefined,
+      created_by_or_agent_ids: undefined,
     });
     expect(all.data.map(row => row.id)).toEqual(
       expect.arrayContaining([newer.schedule.id, older.schedule.id, otherAgent.schedule.id]),
@@ -581,6 +585,7 @@ export function runScheduleStoreContractSuite(deps: {
       limit: 2,
       page_token: undefined,
       agent_names: undefined,
+      created_by_or_agent_ids: undefined,
     });
     expect(page1.data).toHaveLength(2);
     expect(page1.pagination.limit).toBe(2);
@@ -591,11 +596,88 @@ export function runScheduleStoreContractSuite(deps: {
       limit: 2,
       page_token: page1.pagination.next_page_token,
       agent_names: undefined,
+      created_by_or_agent_ids: undefined,
     });
     expect(page2.data).toHaveLength(1);
     expect(page1.data.map(row => row.id)).not.toContain(page2.data[0]?.id);
     expect(page2.pagination.previous_page_token).toEqual(expect.any(String));
     expect(page2.pagination.next_page_token).toBeUndefined();
+  });
+
+  it('listSchedules unions creator and included agent ids before other filters', async () => {
+    const store = deps.getScheduleStore();
+    const ownedAgent = await seedAgent();
+    const managedAgent = await seedAgent();
+    const otherSubject: CreatedBySubject = {
+      subject_id: 'other-user',
+      subject_type: 'user',
+      subject_display_name: 'Other',
+    };
+
+    const owned = await store.createScheduleAndRun({
+      tenant_id: TENANT,
+      agent_id: ownedAgent.id,
+      agent_name: ownedAgent.name,
+      name: 'owned',
+      manifest: manifest({ status: 'paused' }),
+      created_by_subject: USER_SUBJECT,
+      runFrom: new Date(),
+    });
+    const managed = await store.createScheduleAndRun({
+      tenant_id: TENANT,
+      agent_id: managedAgent.id,
+      agent_name: managedAgent.name,
+      name: 'managed',
+      manifest: manifest({ status: 'paused' }),
+      created_by_subject: otherSubject,
+      runFrom: new Date(),
+    });
+    await store.createScheduleAndRun({
+      tenant_id: TENANT,
+      agent_id: ownedAgent.id,
+      agent_name: ownedAgent.name,
+      name: 'unmanaged',
+      manifest: manifest({ status: 'paused' }),
+      created_by_subject: otherSubject,
+      runFrom: new Date(),
+    });
+
+    const visible = await store.listSchedules({
+      tenant_id: TENANT,
+      limit: 25,
+      page_token: undefined,
+      agent_names: undefined,
+      created_by_or_agent_ids: {
+        created_by_subject_id: USER_SUBJECT.subject_id,
+        agent_ids: [managedAgent.id],
+      },
+    });
+    expect(visible.data.map(row => row.id)).toEqual(expect.arrayContaining([owned.schedule.id, managed.schedule.id]));
+    expect(visible.data).toHaveLength(2);
+
+    const creatorOnly = await store.listSchedules({
+      tenant_id: TENANT,
+      limit: 25,
+      page_token: undefined,
+      agent_names: undefined,
+      created_by_or_agent_ids: {
+        created_by_subject_id: USER_SUBJECT.subject_id,
+        agent_ids: [],
+      },
+    });
+    expect(creatorOnly.data.map(row => row.id)).toEqual([owned.schedule.id]);
+
+    const managedNameOnly = await store.listSchedules({
+      tenant_id: TENANT,
+      limit: 25,
+      page_token: undefined,
+      agent_names: [managedAgent.name],
+      created_by_or_agent_ids: {
+        created_by_subject_id: USER_SUBJECT.subject_id,
+        agent_ids: [managedAgent.id],
+      },
+    });
+    expect(managedNameOnly.data.map(row => row.id)).toEqual([managed.schedule.id]);
   });
 
   it('listRuns returns newest scheduled_for first and filters by schedule_id', async () => {
@@ -683,6 +765,7 @@ export function runScheduleStoreContractSuite(deps: {
 
     const toTrigger = await seedScheduled(new Date('2026-08-27T10:00:00.000Z'));
     expect(toTrigger.triggered_at).toBeNull();
+    expect(toTrigger.reason).toBeNull();
     const triggered = await store.updateRunStatus({
       tenant_id: TENANT,
       id: toTrigger.id,
@@ -692,6 +775,7 @@ export function runScheduleStoreContractSuite(deps: {
       expect.objectContaining({
         id: toTrigger.id,
         status: 'triggered',
+        reason: null,
       }),
     );
     if (triggered === undefined) {
@@ -706,12 +790,58 @@ export function runScheduleStoreContractSuite(deps: {
       tenant_id: TENANT,
       id: toFail.id,
       status: 'failed',
+      reason: 'hand-off blew up',
     });
     expect(failed).toEqual(
       expect.objectContaining({
         id: toFail.id,
         status: 'failed',
         triggered_at: null,
+        reason: 'hand-off blew up',
+      }),
+    );
+
+    const toFailWithoutReason = await store.createRun({
+      tenant_id: TENANT,
+      schedule_id: schedule.id,
+      name: cronRunName(new Date('2026-08-27T13:00:00.000Z')),
+      scheduled_for: new Date('2026-08-27T13:00:00.000Z'),
+      status: 'scheduled',
+      created_by_subject: USER_SUBJECT,
+    });
+    const failedWithoutReason = await store.updateRunStatus({
+      tenant_id: TENANT,
+      id: toFailWithoutReason.id,
+      status: 'failed',
+    });
+    expect(failedWithoutReason).toEqual(
+      expect.objectContaining({
+        id: toFailWithoutReason.id,
+        status: 'failed',
+        reason: null,
+      }),
+    );
+
+    const toClearReason = await store.createRun({
+      tenant_id: TENANT,
+      schedule_id: schedule.id,
+      name: cronRunName(new Date('2026-08-27T14:00:00.000Z')),
+      scheduled_for: new Date('2026-08-27T14:00:00.000Z'),
+      status: 'scheduled',
+      created_by_subject: USER_SUBJECT,
+      reason: 'stale failure',
+    });
+    expect(toClearReason.reason).toBe('stale failure');
+    const cleared = await store.updateRunStatus({
+      tenant_id: TENANT,
+      id: toClearReason.id,
+      status: 'triggered',
+    });
+    expect(cleared).toEqual(
+      expect.objectContaining({
+        id: toClearReason.id,
+        status: 'triggered',
+        reason: null,
       }),
     );
 

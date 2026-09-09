@@ -407,7 +407,7 @@ show the title text (see [Custom layouts](#custom-layouts)).
 
 In library modes, picking an agent from Agents switches to a named chat for that agent **and remounts the runtime** so the new agent starts from a clean conversation. Draft chats can be promoted via **Save agent** (`server.saveAgent` on the resolved `AgentUIServer`). **Clear Chat** (thread header) resets the current named or draft session.
 
-Mutable composers expose **Agent Config** for live model parameters, instructions, runtime behavior, per-connector MCP tools, and skills. The compact Tools picker contains only Connectors and Skills. The Save Agent dialog keeps a local editable copy of the same configuration and shares the same selector dialogs; cancelling it leaves the active draft unchanged. Model context and output limits render when the server supplies that optional catalog metadata.
+Mutable composers expose **Agent Config** for live model parameters, instructions, runtime behavior, per-connector MCP tools, and skills. Runtime Config opens in a second right-side drawer. The compact Tools picker contains only Connectors and Skills. The Save Agent dialog keeps a local editable copy of the same configuration and shares the same selector dialogs; cancelling it leaves the active draft unchanged. Model context and output limits render when the server supplies that optional catalog metadata.
 
 ```tsx
 {
@@ -550,6 +550,7 @@ type AgentUIServer = AgentChatServer &
     catalog?: CatalogServer;
     sessions?: AgentSessionsServer;
     metrics?: AgentMetricsServer;
+    schedules?: ScheduleServer;
   };
 ```
 
@@ -557,7 +558,13 @@ type AgentUIServer = AgentChatServer &
 | -------------------- | ------------------------------------------------------------------- |
 | `AgentChatServer`    | Sessions, turns, streaming, draft `AgentSpec` sync                  |
 | `AgentBuilderServer` | `getModels` / `getSkills` / `getMcp` / `searchAgents` / `saveAgent` |
+| `catalog`            | Settings CRUD (models / connectors / optional skills & sandbox)     |
+| `sessions`           | Agent details + sessions browser (`/sessions`, `/library/:agentId`) |
+| `schedules`          | Schedules page (`/schedules`)                                       |
 | `AgentMetricsServer` | Agent meter aggregates, chart definitions, and chart data           |
+
+Omit an optional port to hide its chrome and unregister its routes (same gate as the
+Settings button for `catalog`).
 
 **Zero-config TrueFoundry** — see [Getting started](#getting-started). The SDK calls `createTrueFoundryAgentUIServer` for you.
 

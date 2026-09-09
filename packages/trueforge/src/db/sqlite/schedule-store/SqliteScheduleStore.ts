@@ -1,13 +1,16 @@
-import type { CreatedBySubject, TokenPagination } from '@truefoundry/trueforge-core/agent-session';
+import {
+  CreatedBySubjectSchema,
+  type CreatedBySubject,
+  type TokenPagination,
+} from '@truefoundry/trueforge-core/agent-session';
 import {
   decodeOffsetPageToken,
   paginateOffsetRows,
 } from '@truefoundry/trueforge-core/agent-session/store/OffsetPageToken';
-import { sql, type ExpressionBuilder, type Kysely, type Transaction } from 'kysely';
+import type { ExpressionBuilder, Kysely, Transaction } from 'kysely';
 import { nextTriggerAfter } from '../../../runtime/cron';
 import type { ScheduleManifest, ScheduleRunStatus, ScheduleStatus } from '../../../schemas/schedule';
 import { newId } from '../../../utils/id';
-import { parseStoredCreatedBySubject } from '../../createdBySubject';
 import {
   cronRunName,
   parseStoredScheduleManifest,
@@ -31,7 +34,7 @@ import {
   type UpdateScheduleRunStatusInput,
 } from '../../scheduleStore';
 import { isUniqueViolation } from '../client';
-import { jsonbBind, jsonText, nowIso } from '../sqlExpressions';
+import { jsonbBind, jsonText, nowIso, whereCreatedByOrAgentIds } from '../sqlExpressions';
 import type { Database } from '../types';
 
 /** Column list projecting the JSONB manifest as parsed JSON (see JSON_RESULT_COLUMNS). */
@@ -60,6 +63,7 @@ function runColumns(eb: ExpressionBuilder<Database, 'schedule_run'>) {
     'status' as const,
     jsonText<CreatedBySubject>(eb.ref('created_by_subject')).as('created_by_subject'),
     'triggered_at' as const,
+    'reason' as const,
     'created_at' as const,
     'updated_at' as const,
   ];
@@ -87,6 +91,7 @@ interface RunRow {
   status: ScheduleRunStatus;
   created_by_subject: CreatedBySubject;
   triggered_at: string | null;
+  reason: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -95,14 +100,14 @@ function toScheduleRecord(row: ScheduleRow): ScheduleRecord {
   return {
     ...row,
     manifest: parseStoredScheduleManifest(row.manifest),
-    created_by_subject: parseStoredCreatedBySubject(row.created_by_subject),
+    created_by_subject: CreatedBySubjectSchema.parse(row.created_by_subject),
   };
 }
 
 function toRunRecord(row: RunRow): ScheduleRunRecord {
   return {
     ...row,
-    created_by_subject: parseStoredCreatedBySubject(row.created_by_subject),
+    created_by_subject: CreatedBySubjectSchema.parse(row.created_by_subject),
   };
 }
 
@@ -278,9 +283,7 @@ export class SqliteScheduleStore implements IScheduleStore<Transaction<Database>
     if (input.agent_names !== undefined) {
       query = query.where('agent_name', 'in', [...input.agent_names]);
     }
-    if (input.created_by_subject_id !== undefined) {
-      query = query.where(sql`json_extract(created_by_subject, '$.subject_id')`, '=', input.created_by_subject_id);
-    }
+    query = whereCreatedByOrAgentIds(query, input.created_by_or_agent_ids);
     const rows = await query
       .orderBy('created_at', 'desc')
       .orderBy('id')
@@ -345,6 +348,7 @@ export class SqliteScheduleStore implements IScheduleStore<Transaction<Database>
           status: input.status,
           created_by_subject: jsonbBind(input.created_by_subject),
           triggered_at: input.triggered_at?.toISOString() ?? null,
+          reason: input.reason ?? null,
           created_at: timestamp,
           updated_at: timestamp,
         })
@@ -365,10 +369,11 @@ export class SqliteScheduleStore implements IScheduleStore<Transaction<Database>
   ): Promise<ScheduleRunRecord | undefined> {
     const db = transaction ?? this.#db;
     const timestamp = nowIso();
+    const reason = input.status === 'failed' ? (input.reason ?? null) : null;
     const patch =
       input.status === 'triggered'
-        ? { status: input.status, triggered_at: timestamp, updated_at: timestamp }
-        : { status: input.status, updated_at: timestamp };
+        ? { status: input.status, triggered_at: timestamp, reason, updated_at: timestamp }
+        : { status: input.status, reason, updated_at: timestamp };
     const row = await db
       .updateTable('schedule_run')
       .set(patch)

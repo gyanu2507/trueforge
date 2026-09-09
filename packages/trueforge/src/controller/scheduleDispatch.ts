@@ -22,6 +22,11 @@ import type { ControlLoop } from './Controller';
  */
 export const DISPATCH_BATCH_LIMIT = 20;
 
+/** Human-readable failure detail for a `failed` schedule run. */
+export function scheduleRunFailureReason(error: unknown): string {
+  return error instanceof Error && error.message.trim() !== '' ? error.message : 'Schedule run failed';
+}
+
 /**
  * Gap between loop passes.
  *
@@ -59,6 +64,7 @@ function executeScheduledRun(client: ScheduleRunApiClient): (item: ScheduleDispa
     const { data: session } = await client.internal.sessions.getOrCreateByExternalId({
       externalId: run.id,
       agent: { name: schedule.agent_name },
+      source: { type: 'schedule', id: schedule.id, runId: run.id },
     });
 
     const turns = await client.sessions.listTurns(session.id, { limit: 1 });
@@ -107,6 +113,7 @@ export async function startScheduleRun(params: {
     external_id: run.id,
     created_by_subject: schedule.created_by_subject,
     agent: { type: 'reference', id: named.id, name: named.name },
+    source: { type: 'schedule', id: schedule.id, run_id: run.id },
   });
 
   // idempotency check
@@ -138,13 +145,17 @@ async function finishScheduledRun<TTransaction>(params: {
   run: ScheduleRunRecord;
   now: Date;
   status: ScheduleRunStatus;
+  reason?: string | null;
   withTransaction: WithTransaction<TTransaction>;
 }): Promise<void> {
-  const { store, withTransaction, run, status, now } = params;
+  const { store, withTransaction, run, status, reason, now } = params;
   await withTransaction(async txn => {
     const latest = await store.getScheduleForUpdate({ tenant_id: run.tenant_id, id: run.schedule_id }, txn);
 
-    const updated = await store.updateRunStatus({ tenant_id: run.tenant_id, id: run.id, status }, txn);
+    const updated = await store.updateRunStatus(
+      { tenant_id: run.tenant_id, id: run.id, status, reason: reason ?? null },
+      txn,
+    );
     if (updated === undefined) {
       return;
     }
@@ -268,6 +279,7 @@ export async function dispatchScheduledRuns<TTransaction>(params: {
           run,
           now,
           status: 'failed',
+          reason: scheduleRunFailureReason(error),
           withTransaction,
         });
         failed += 1;

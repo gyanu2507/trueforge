@@ -12,6 +12,7 @@ import { EmptyScreen } from '../EmptyScreen.js';
 import { auiButtonClass } from '../lib/buttonClasses.js';
 import { cn } from '../lib/cn.js';
 import { searchAllAgents } from '../lib/useSearchAgentsList.js';
+import { PageHeader } from '../PageHeader.js';
 import { Button } from '../primitives/Button.js';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../primitives/Dialog.js';
 import { DropdownMenu, DropdownMenuItem } from '../primitives/DropdownMenu.js';
@@ -80,16 +81,16 @@ function ScheduleRowActions({
 }) {
   return (
     <div className="inline-flex items-center justify-end gap-1.5">
-      <button
+      <Button.Secondary
         type="button"
         disabled={running}
         aria-label={`Run now ${schedule.name}`}
-        className={auiButtonClass({ variant: 'outline', size: 'sm' })}
+        size="large"
         onClick={onRunNow}
       >
         <Icon name={running ? 'loader' : 'play'} className={cn('size-3.5', running && 'animate-spin')} />
         Run now
-      </button>
+      </Button.Secondary>
       <DropdownMenu
         align="end"
         trigger={
@@ -98,7 +99,7 @@ function ScheduleRowActions({
             className={auiButtonClass({ variant: 'ghost', size: 'icon' })}
             aria-label={`Actions for ${schedule.name}`}
           >
-            <Icon name="ellipsis" className="size-4" />
+            <Icon name="ellipsis" />
           </button>
         }
       >
@@ -344,53 +345,51 @@ export function SchedulesPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-primary-bg">
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-4 py-2.5 md:px-6">
-        <div className="flex min-w-0 items-center gap-2">
-          <Icon name="calendar-clock" className="text-text-primary size-4" />
-          <h1 className="text-text-primary truncate text-md font-semibold">Scheduled Agents</h1>
-        </div>
+      <PageHeader
+        title="Scheduled Agents"
+        end={
+          <>
+            <div className="w-full sm:w-56">
+              <SearchInput query={nameQuery} setQuery={setNameQuery} placeholder="Search schedules by name" />
+            </div>
+            <PopoverSelect
+              value={statusFilter}
+              onValueChange={setStatusFilter}
+              options={STATUS_FILTER_OPTIONS}
+              className="sm:w-40"
+              aria-label="Filter by status"
+            />
+            <PopoverSelect
+              value={agentFilter}
+              onValueChange={value => {
+                setAgentFilter(value);
+                setPageToken(undefined);
+                setPrevTokenStack([]);
+              }}
+              options={[
+                { value: 'all', label: 'All agents' },
+                ...agentOptions.map(agent => ({ value: agent.agentId, label: agent.name })),
+              ]}
+              className="sm:w-40"
+              aria-label="Filter by agent"
+            />
+            <Button.Primary
+              type="button"
+              onClick={() =>
+                setDrawer({
+                  kind: 'create',
+                  agentId: agentFilter !== 'all' ? agentFilter : undefined,
+                })
+              }
+            >
+              <Icon name="plus" className="size-3.5" />
+              Create Schedule
+            </Button.Primary>
+          </>
+        }
+      />
 
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <div className="w-full sm:w-56">
-            <SearchInput query={nameQuery} setQuery={setNameQuery} placeholder="Search schedules by name" />
-          </div>
-          <PopoverSelect
-            value={statusFilter}
-            onValueChange={setStatusFilter}
-            options={STATUS_FILTER_OPTIONS}
-            className="sm:w-40"
-            aria-label="Filter by status"
-          />
-          <PopoverSelect
-            value={agentFilter}
-            onValueChange={value => {
-              setAgentFilter(value);
-              setPageToken(undefined);
-              setPrevTokenStack([]);
-            }}
-            options={[
-              { value: 'all', label: 'All agents' },
-              ...agentOptions.map(agent => ({ value: agent.agentId, label: agent.name })),
-            ]}
-            className="sm:w-40"
-            aria-label="Filter by agent"
-          />
-          <Button
-            type="button"
-            onClick={() =>
-              setDrawer({
-                kind: 'create',
-                agentId: agentFilter !== 'all' ? agentFilter : undefined,
-              })
-            }
-          >
-            <Icon name="plus" className="size-3.5" />
-            Create Schedule
-          </Button>
-        </div>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-auto px-4 py-4 md:px-6">
+      <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
         {loading ? (
           <div className="flex flex-col gap-2" role="status" aria-label="Loading schedules">
             {Array.from({ length: 5 }, (_, i) => (
@@ -423,7 +422,7 @@ export function SchedulesPage() {
             ) : null}
           </div>
         ) : (
-          <div className="rounded-lg border border-border">
+          <div className="overflow-hidden rounded-lg border border-border">
             <Table className="min-w-[48rem]">
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
@@ -446,7 +445,7 @@ export function SchedulesPage() {
                       <TableCell className="text-text-primary font-medium">
                         <button
                           type="button"
-                          className="text-primary-button-bg hover:underline text-left"
+                          className="cursor-pointer text-left"
                           onClick={() => setDrawer({ kind: 'edit', schedule })}
                         >
                           {schedule.name}
@@ -540,12 +539,12 @@ export function SchedulesPage() {
             </DialogHeader>
           </DialogContent>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={() => setPendingDelete(null)}>
+            <Button.Secondary type="button" onClick={() => setPendingDelete(null)}>
               Cancel
-            </Button>
-            <Button type="button" variant="destructive" onClick={() => void handleDelete(pendingDelete)}>
+            </Button.Secondary>
+            <Button.Destructive type="button" onClick={() => void handleDelete(pendingDelete)}>
               Delete
-            </Button>
+            </Button.Destructive>
           </DialogFooter>
         </Dialog>
       ) : null}

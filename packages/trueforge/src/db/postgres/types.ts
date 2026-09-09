@@ -8,6 +8,7 @@ import type {
   PersistedTurnEvent,
   SessionMetadata,
   SessionMetrics,
+  SessionSource,
   TurnInputItem,
   TurnState,
 } from '@truefoundry/trueforge-core/agent-session';
@@ -56,6 +57,10 @@ export interface SessionTable {
   session_id: string;
   /** Caller identity that created the session (immutable after create). */
   created_by_subject: JSONColumnType<CreatedBySubject, CreatedBySubject, CreatedBySubject>;
+  /**
+   * Null for interactive sessions.
+   */
+  source: JSONColumnType<SessionSource, SessionSource | null, SessionSource | null> | null;
   /**
    * Named registry binding; XOR with `agent_spec`
    * (CHECK session_agent_xor_check).
@@ -425,6 +430,7 @@ export interface ScheduleRunTable {
   status: ScheduleRunStatus;
   created_by_subject: JSONColumnType<CreatedBySubject, CreatedBySubject, CreatedBySubject>;
   triggered_at: Date | null;
+  reason: string | null;
   created_at: Date;
   updated_at: Date;
 }

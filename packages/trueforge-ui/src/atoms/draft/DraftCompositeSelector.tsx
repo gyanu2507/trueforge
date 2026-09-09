@@ -12,11 +12,15 @@ import { auiButtonClass } from '../lib/buttonClasses.js';
 import { cn } from '../lib/cn.js';
 import { useCompactLayout } from '../lib/CompactLayoutContext.js';
 import { auiInputClass } from '../lib/inputClasses.js';
+import { useInfiniteScrollSentinel } from '../lib/useInfiniteScrollSentinel.js';
 import { useIsMobile } from '../lib/useIsMobile.js';
 import { BottomSheet } from '../primitives/BottomSheet.js';
+import { Button } from '../primitives/Button.js';
+import { CatalogLogo } from '../primitives/CatalogLogo.js';
 import { Tooltip } from '../primitives/Tooltip.js';
 import { DraftCatalogEmptyState } from './DraftCatalogEmptyState.js';
 import { useDraftCatalog } from './DraftCatalogProvider.js';
+import { connectorsWithSelectedStubs } from './mcpConnectorStubs.js';
 
 /** Catalog-backed mount shape used by the draft picker (runtime mounts stay opaque). */
 export type DraftMount = { id: string; name: string };
@@ -66,6 +70,8 @@ function Checkbox({ checked }: { checked: boolean }) {
 export function CatalogRow({
   title,
   description,
+  logo,
+  fallbackIcon,
   checked,
   disabled = false,
   onToggle,
@@ -74,6 +80,9 @@ export function CatalogRow({
 }: {
   title: string;
   description?: string;
+  /** Catalog logo URL; when absent, `fallbackIcon` (or the title initial) is shown. */
+  logo?: string | undefined;
+  fallbackIcon?: string;
   checked: boolean;
   disabled?: boolean;
   onToggle: () => void;
@@ -82,8 +91,17 @@ export function CatalogRow({
 }) {
   const content = (
     <>
-      <span className="bg-secondary-bg text-text-secondary mt-0.5 flex size-7 shrink-0 items-center justify-center rounded text-xs font-semibold">
-        {title.charAt(0).toUpperCase()}
+      <span
+        className="bg-secondary-bg text-text-secondary mt-0.5 flex size-7 shrink-0 items-center justify-center overflow-hidden rounded border border-border text-xs font-semibold"
+        aria-hidden
+      >
+        {logo ? (
+          <CatalogLogo src={logo} alt={title} className="size-4" />
+        ) : fallbackIcon ? (
+          <Icon name={fallbackIcon} className="text-text-primary size-4" />
+        ) : (
+          title.charAt(0).toUpperCase()
+        )}
       </span>
       <span className="min-w-0 flex-1">
         <span className="text-text-primary block truncate text-sm font-medium">{title}</span>
@@ -161,11 +179,11 @@ export function ConnectorConnectButton({
   const { handleAuthorize, isOAuthLoading } = useMCPAuth();
 
   return (
-    <button
+    <Button.Secondary
       type="button"
       aria-label={`Connect ${connector.name}`}
       disabled={isOAuthLoading}
-      className={auiButtonClass({ variant: 'secondary', size: 'sm' })}
+      size="small"
       onKeyDown={event => {
         event.stopPropagation();
       }}
@@ -177,7 +195,7 @@ export function ConnectorConnectButton({
       }}
     >
       {isOAuthLoading ? 'Connecting...' : 'Connect'}
-    </button>
+    </Button.Secondary>
   );
 }
 
@@ -215,14 +233,25 @@ export type DraftCompositeSelectorProps = {
 
 function SectionHeading({ label, count }: { label: string; count: number }) {
   return (
-    <div className="text-text-secondary px-3 pt-2 pb-1 text-[11px] font-medium tracking-wide uppercase">
+    <div className="text-text-secondary px-3 pt-2 pb-1 text-[0.6875rem] font-medium tracking-wide uppercase">
       {label} ({count})
     </div>
   );
 }
 
 export function DraftCompositeSelector({ disabled, isRunning, onAttach }: DraftCompositeSelectorProps) {
-  const { skills, connectors, loading, ensureLoaded, refreshConnectors } = useDraftCatalog();
+  const {
+    skills,
+    connectors,
+    connectorLogos,
+    connectorsHasMore,
+    connectorsLoadMoreFailed,
+    connectorsLoadingMore,
+    loading,
+    ensureLoaded,
+    refreshConnectors,
+    loadMoreConnectors,
+  } = useDraftCatalog();
   const capabilities = useServerCapabilities();
   const settingsCatalog = useOptionalCatalogServer();
   const shell = useOptionalShellMode();
@@ -343,17 +372,29 @@ export function DraftCompositeSelector({ disabled, isRunning, onAttach }: DraftC
 
   useEffect(() => () => clearFlushTimer(), [clearFlushTimer]);
 
+  const { listRef: connectorsListRef, sentinelRef: connectorsSentinelRef } = useInfiniteScrollSentinel({
+    enabled: open && tab === 'connectors',
+    hasMore: connectorsHasMore && !connectorsLoadMoreFailed,
+    loading: connectorsLoadingMore || loading,
+    onLoadMore: loadMoreConnectors,
+  });
+
+  const catalogConnectors = useMemo(
+    () => connectorsWithSelectedStubs({ connectors, selected: selectedMcp }),
+    [connectors, selectedMcp],
+  );
+
   const filteredConnectors = useMemo(() => {
     const needle = query.trim().toLowerCase();
     const matches = needle
-      ? connectors.filter(
+      ? catalogConnectors.filter(
           c => c.name.toLowerCase().includes(needle) || (c.description?.toLowerCase().includes(needle) ?? false),
         )
-      : connectors;
+      : catalogConnectors;
     return [...matches].sort(
       (left, right) => Number(isUnauthenticatedDcrConnector(left)) - Number(isUnauthenticatedDcrConnector(right)),
     );
-  }, [connectors, query]);
+  }, [catalogConnectors, query]);
 
   const filteredSkills = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -452,7 +493,7 @@ export function DraftCompositeSelector({ disabled, isRunning, onAttach }: DraftC
               <Icon name={t.icon} className="size-3.5" />
               {t.label}
               {count != null && count > 0 ? (
-                <span className="bg-secondary-bg rounded px-1 text-[10px]">{count}</span>
+                <span className="bg-secondary-bg rounded px-1 text-[0.625rem]">{count}</span>
               ) : null}
             </button>
           );
@@ -474,7 +515,10 @@ export function DraftCompositeSelector({ disabled, isRunning, onAttach }: DraftC
             <span className="text-xs leading-none">{skillsDisabledReason}</span>
           </div>
         ) : null}
-        <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-2">
+        <div
+          ref={tab === 'connectors' ? connectorsListRef : undefined}
+          className="min-h-0 flex-1 overflow-y-auto px-1 pb-2"
+        >
           {tab === 'connectors' ? (
             <>
               {pinnedSelectedConnectors.length > 0 ? (
@@ -484,7 +528,8 @@ export function DraftCompositeSelector({ disabled, isRunning, onAttach }: DraftC
                     <CatalogRow
                       key={c.id}
                       title={c.name}
-                      description={c.description}
+                      logo={connectorLogos[c.name]}
+                      fallbackIcon="mcp-server"
                       checked={selectedMcpIds.has(c.id)}
                       action={
                         isUnauthenticatedDcrConnector(c) ? (
@@ -503,7 +548,8 @@ export function DraftCompositeSelector({ disabled, isRunning, onAttach }: DraftC
                     <CatalogRow
                       key={c.id}
                       title={c.name}
-                      description={c.description}
+                      logo={connectorLogos[c.name]}
+                      fallbackIcon="mcp-server"
                       checked={selectedMcpIds.has(c.id)}
                       action={
                         isUnauthenticatedDcrConnector(c) ? (
@@ -515,17 +561,34 @@ export function DraftCompositeSelector({ disabled, isRunning, onAttach }: DraftC
                   ))}
                 </>
               ) : null}
-              {filteredConnectors.length === 0 ? (
+              {filteredConnectors.length === 0 && connectors.length > 0 ? (
+                <DraftCatalogEmptyState loading={loading} emptyLabel="No connectors" settingsTarget="Connectors" />
+              ) : null}
+              {connectors.length === 0 ? (
                 <DraftCatalogEmptyState
                   loading={loading}
                   emptyLabel="No connectors"
                   settingsTarget="Connectors"
-                  onOpenSettings={
-                    connectors.length === 0 && shell && canConfigureConnectors
-                      ? () => openSettings('connectors')
-                      : undefined
-                  }
+                  onOpenSettings={shell && canConfigureConnectors ? () => openSettings('connectors') : undefined}
                 />
+              ) : null}
+              {connectorsHasMore ? (
+                <div
+                  ref={connectorsLoadMoreFailed ? undefined : connectorsSentinelRef}
+                  className="flex h-8 items-center justify-center"
+                >
+                  {connectorsLoadMoreFailed ? (
+                    <button
+                      type="button"
+                      className={auiButtonClass({ variant: 'ghost', size: 'small' })}
+                      onClick={loadMoreConnectors}
+                    >
+                      Retry loading connectors
+                    </button>
+                  ) : connectorsLoadingMore ? (
+                    <span className="text-text-secondary text-[0.625rem]">Loading…</span>
+                  ) : null}
+                </div>
               ) : null}
             </>
           ) : (
@@ -592,11 +655,7 @@ export function DraftCompositeSelector({ disabled, isRunning, onAttach }: DraftC
             aria-haspopup="dialog"
             aria-expanded={open}
             aria-controls={open ? menuId : undefined}
-            className={auiButtonClass({
-              variant: 'ghost',
-              size: 'sm',
-              className: 'h-8 rounded-md px-2 text-xs',
-            })}
+            className={auiButtonClass({ variant: 'ghost', size: 'icon' })}
             onClick={() => {
               if (open) {
                 setOpenAndFlush(false);
@@ -607,7 +666,7 @@ export function DraftCompositeSelector({ disabled, isRunning, onAttach }: DraftC
           >
             {/* Icon-only trigger; the count and name reach assistive tech via aria-label
                 and sighted users via the tooltip, which lists the selected tools. */}
-            <Icon name="wrench" className="size-3.5" />
+            <Icon name="wrench" />
           </button>
         </Tooltip>
       ) : null}

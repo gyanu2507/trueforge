@@ -14,6 +14,7 @@ const MCP_SERVERS_PATH = 'v1/mcp';
 const TFG_AGENTS_PATH = 'internal/tfg/agents';
 const SESSION_PATH = 'v1/session';
 const AGENT_PERMISSIONS_PATH = 'v1/authorize/permissions';
+const VEND_TOKEN_PATH = 'internal/vend-token';
 const INTEGRATIONS_PAGE_SIZE = 1000;
 
 /**
@@ -62,7 +63,7 @@ const PutRemoteAgentResponseSchema = z.object({
   agentId: z.string().min(1),
 });
 
-const AgentPermissionSchema = z.enum(['READ_AGENT', 'MANAGE_AGENT']);
+const AgentPermissionSchema = z.enum(['READ_AGENT', 'USE_AGENT', 'MANAGE_AGENT', 'DELETE_AGENT']);
 export type AgentPermission = z.infer<typeof AgentPermissionSchema>;
 
 /** ServiceFoundry may return grants we do not use; drop them instead of failing. */
@@ -76,6 +77,10 @@ const AgentPermissionsSchema = z.record(
   ),
 );
 export type AgentPermissions = z.infer<typeof AgentPermissionsSchema>;
+
+const VendTokenResponseSchema = z.object({
+  token: z.string().min(1),
+});
 
 export interface PutRemoteAgentInput {
   accessToken: string;
@@ -117,6 +122,7 @@ export class TrueFoundryServiceFoundryServerClient {
   readonly #dispatcher: Dispatcher | undefined;
   readonly #httpTimeoutMs: number;
   readonly #httpAgentTimeoutMs: number;
+  readonly #apiKey: string;
 
   constructor(input: {
     serviceFoundryServerUrl: string;
@@ -124,6 +130,8 @@ export class TrueFoundryServiceFoundryServerClient {
     tls: InternalTlsOptions;
     httpTimeoutMs: number;
     httpAgentTimeoutMs: number;
+    /** Service API key for `vend-token` only; user calls still pass a bearer `accessToken`. */
+    apiKey: string;
   }) {
     const tls = input.tls;
     this.#baseUrl = normalizeInternalTlsUrl({ url: input.serviceFoundryServerUrl, enabled: tls.enabled }).replace(
@@ -134,6 +142,7 @@ export class TrueFoundryServiceFoundryServerClient {
     this.#logger = input.logger;
     this.#httpTimeoutMs = input.httpTimeoutMs;
     this.#httpAgentTimeoutMs = input.httpAgentTimeoutMs;
+    this.#apiKey = input.apiKey;
   }
 
   async listProviderIntegrations(accessToken: string): Promise<unknown[]> {
@@ -397,6 +406,40 @@ export class TrueFoundryServiceFoundryServerClient {
     return parsed.data;
   }
 
+  /**
+   * Exchange a TrueFoundry API key for an agent-scoped token.
+   * Authenticated with the server API key, not the user bearer.
+   */
+  async vendToken(input: {
+    subject: { id: string; type: string; display_name: string };
+    agentId: string;
+    tenantName: string;
+  }): Promise<string> {
+    const payload = await this.#requestJson({
+      url: this.#url(VEND_TOKEN_PATH),
+      accessToken: this.#apiKey,
+      method: 'POST',
+      body: {
+        identity: {
+          tenantName: input.tenantName,
+          subject: { id: input.subject.id, type: input.subject.type },
+          actor: { id: input.agentId, type: 'agent' },
+        },
+      },
+    });
+    const parsed = VendTokenResponseSchema.safeParse(payload);
+    if (!parsed.success) {
+      this.#logger.error('TrueFoundry ServiceFoundry vend-token response was malformed', {
+        ...extractErrorLogFields(parsed.error),
+      });
+      throw new HTTPException(424, {
+        message: 'TrueFoundry ServiceFoundry vend-token response was malformed',
+        cause: parsed.error,
+      });
+    }
+    return parsed.data.token;
+  }
+
   #parseListResponse(payload: unknown): ListResponse {
     const parsed = ListResponseSchema.safeParse(payload);
     if (!parsed.success) {
@@ -473,8 +516,9 @@ export class TrueFoundryServiceFoundryServerClient {
       durationMs: Date.now() - startedAt,
     });
     if (response.status === 401 || response.status === 403) {
+      const detail = await readServiceFoundryErrorMessage(response);
       throw new HTTPException(response.status, {
-        message: 'TrueFoundry ServiceFoundry server rejected the request',
+        message: `TrueFoundry ServiceFoundry server rejected the request: ${detail ?? `HTTP ${String(response.status)}`}`,
       });
     }
     if (response.status === 404 && input.notFoundOk) {

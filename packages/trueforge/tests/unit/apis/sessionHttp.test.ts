@@ -21,6 +21,7 @@ import { SqliteSessionMetricsStore } from '../../../src/db/sqlite/session-metric
 import { SqliteSessionStore } from '../../../src/db/sqlite/session-store/SqliteSessionStore';
 import { SqliteSkillStore } from '../../../src/db/sqlite/skill-store/SqliteSkillStore';
 import { ActiveTurnRegistry } from '../../../src/runtime/activeTurns';
+import { ListSessionsResponseSchema } from '../../../src/schemas/session';
 import {
   GetSessionMetricsChartDataResponseSchema,
   GetSessionMetricsChartResponseSchema,
@@ -40,22 +41,24 @@ function jsonInit(method: string, body: unknown): RequestInit {
   };
 }
 
+const deniedCanAccessAgent = jest.fn((_input: Parameters<Authorizer['canAccessAgent']>[0]) => Promise.resolve(false));
 const denyAllAuthorizer: Authorizer = {
   listAgentAccess: () => Promise.resolve({ kind: 'agent_external_ids', agent_external_ids: [] }),
-  canAccessAgent: () => Promise.resolve(false),
+  canAccessAgent: deniedCanAccessAgent,
 };
 
 describe('sessions HTTP agent binding', () => {
   let app: OpenAPIHono;
   let agentStore: SqliteAgentStore;
   let sessionStore: SqliteSessionStore;
+  let sessionMetricsStore: SqliteSessionMetricsStore;
   let sessionDeps: SessionsRouterDeps;
 
   beforeEach(async () => {
     const db = createSqliteDb(':memory:');
     await migrateSqliteToLatest(db);
     sessionStore = new SqliteSessionStore(db);
-    const sessionMetricsStore = new SqliteSessionMetricsStore(db);
+    sessionMetricsStore = new SqliteSessionMetricsStore(db);
     const sessions = new Sessions({ sessionStore });
     const modelProviderStore = new SqliteModelProviderStore(db);
     const mcpServerStore = new SqliteMcpServerStore(db);
@@ -88,7 +91,7 @@ describe('sessions HTTP agent binding', () => {
       resolveMcpServerStore: () => mcpServerStore,
       skillStore,
       resolveAgentStore: () => agentStore,
-      sandboxProviderStore,
+      resolveSandboxProviderStore: () => sandboxProviderStore,
       redis: createClient(),
       requestReplyRouter: new RequestReplyRouter(),
       resolveRequestContext: () => STANDALONE_REQUEST_CONTEXT,
@@ -104,6 +107,8 @@ describe('sessions HTTP agent binding', () => {
       createInternalMetricsRouter({
         sessionMetricsStore,
         resolveRequestContext: deps.resolveRequestContext,
+        resolveAgentStore: deps.resolveAgentStore,
+        authorizer: deps.authorizer,
       }),
     );
   });
@@ -130,7 +135,7 @@ describe('sessions HTTP agent binding', () => {
       subject_type: STANDALONE_REQUEST_CONTEXT.subject.type,
       subject_display_name: STANDALONE_REQUEST_CONTEXT.subject.display_name,
     });
-    expect(json.data.metrics).toEqual({ total_cost_in_usd: 0, total_duration_ms: 0, total_turns: 0 });
+    expect(json.data.metrics).toEqual({ total_duration_ms: 0, total_turns: 0 });
   });
 
   it('returns 404 when creating a session for an unknown agent name', async () => {
@@ -194,6 +199,7 @@ describe('sessions HTTP agent binding', () => {
       custom: null,
       metadata: {},
       external_id: null,
+      source: null,
     });
     await sessionStore.createSession({
       tenant_id: 'default',
@@ -203,6 +209,7 @@ describe('sessions HTTP agent binding', () => {
       custom: null,
       metadata: {},
       external_id: null,
+      source: null,
     });
     const start = new Date(Date.now() - 60 * 60 * 1000);
     const end = new Date(Date.now() + 60 * 60 * 1000);
@@ -229,6 +236,87 @@ describe('sessions HTTP agent binding', () => {
     expect(sessionsChartResponse.status).toBe(200);
     const sessionsChart = GetSessionMetricsChartDataResponseSchema.parse(await sessionsChartResponse.json());
     expect(sessionsChart.data.graphs[0]?.graph_lines[0]?.values.reduce((sum, point) => sum + point.value, 0)).toBe(1);
+  });
+
+  it('lets an agent manager read named sessions, events, and metrics but not mutate them', async () => {
+    const agent = await agentStore.createAgent({
+      tenant_id: 'default',
+      created_by_subject: { subject_id: 'owner', subject_type: 'user', subject_display_name: 'Owner' },
+      name: 'managed-agent',
+      manifest: inlineSpec,
+      external_id: 'managed-agent-external',
+    });
+    await sessionStore.createSession({
+      tenant_id: 'default',
+      session_id: 'managed-session',
+      created_by_subject: { subject_id: 'owner', subject_type: 'user', subject_display_name: 'Owner' },
+      agent: { type: 'reference', id: agent.id, name: agent.name },
+      custom: null,
+      metadata: {},
+      external_id: null,
+      source: null,
+    });
+    const managerAuthorizer: Authorizer = {
+      listAgentAccess: input =>
+        Promise.resolve(
+          input.action === 'manage'
+            ? { kind: 'agent_external_ids', agent_external_ids: ['managed-agent-external'] }
+            : { kind: 'agent_external_ids', agent_external_ids: [] },
+        ),
+      canAccessAgent: () => Promise.resolve(false),
+    };
+    const managerDeps = {
+      ...sessionDeps,
+      requestReplyRouter: new RequestReplyRouter(),
+      authorizer: managerAuthorizer,
+    };
+    const managerApp = new OpenAPIHono();
+    managerApp.route('/', createSessionsRouter(managerDeps));
+    managerApp.route(
+      '/api/internal/metrics',
+      createInternalMetricsRouter({
+        sessionMetricsStore,
+        resolveRequestContext: managerDeps.resolveRequestContext,
+        resolveAgentStore: managerDeps.resolveAgentStore,
+        authorizer: managerAuthorizer,
+      }),
+    );
+
+    expect((await managerApp.request('/managed-session')).status).toBe(200);
+    expect((await managerApp.request('/managed-session/events')).status).toBe(200);
+    const listed = await managerApp.request('/');
+    expect(ListSessionsResponseSchema.parse(await listed.json()).data.map(session => session.id)).toContain(
+      'managed-session',
+    );
+    const listedMine = await managerApp.request('/?created_by_me=true');
+    expect(listedMine.status).toBe(200);
+    expect(ListSessionsResponseSchema.parse(await listedMine.json()).data.map(session => session.id)).not.toContain(
+      'managed-session',
+    );
+    expect((await managerApp.request('/?created_by_me=maybe')).status).toBe(400);
+
+    const own = await app.request('/', jsonInit('POST', { agent: { spec: inlineSpec } }));
+    expect(own.status).toBe(201);
+    const ownId = ((await own.json()) as { data: { id: string } }).data.id;
+    expect(
+      ListSessionsResponseSchema.parse(await (await app.request('/?created_by_me=true')).json()).data.map(
+        session => session.id,
+      ),
+    ).toContain(ownId);
+
+    const query = new URLSearchParams({
+      agent_id: agent.id,
+      start_timestamp: new Date(Date.now() - 60_000).toISOString(),
+      end_timestamp: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const metrics = GetSessionMetricsMeterResponseSchema.parse(
+      await (await managerApp.request(`/api/internal/metrics/meters?${query.toString()}`)).json(),
+    );
+    expect(metrics.data.meters.find(meter => meter.name === 'total_sessions')?.aggregate_value).toBe(1);
+
+    expect((await managerApp.request('/managed-session', jsonInit('PATCH', {}))).status).toBe(403);
+    expect((await managerApp.request('/managed-session', { method: 'DELETE' })).status).toBe(403);
+    expect((await managerApp.request('/managed-session/cancel', { method: 'POST' })).status).toBe(403);
   });
 
   it('returns the static session metrics charts', async () => {
@@ -265,6 +353,7 @@ describe('sessions HTTP agent binding', () => {
       custom: null,
       metadata: {},
       external_id: null,
+      source: null,
     });
 
     const created = await app.request('/', jsonInit('POST', { agent: { spec: inlineSpec } }));
@@ -413,6 +502,15 @@ describe('sessions HTTP agent binding', () => {
     );
     expect(tooLongKey.status).toBe(400);
 
+    const badCharsetKey = await app.request(
+      '/',
+      jsonInit('POST', {
+        agent: { spec: inlineSpec },
+        metadata: { 'env[prod]': 'v' },
+      }),
+    );
+    expect(badCharsetKey.status).toBe(400);
+
     const tooLongValue = await app.request(
       '/',
       jsonInit('POST', {
@@ -421,6 +519,31 @@ describe('sessions HTTP agent binding', () => {
       }),
     );
     expect(tooLongValue.status).toBe(400);
+  });
+
+  it('lists by metadata[key]=value containment and rejects bare metadata', async () => {
+    const prod = await app.request(
+      '/',
+      jsonInit('POST', { agent: { spec: inlineSpec }, metadata: { env: 'prod', team: 'platform' } }),
+    );
+    expect(prod.status).toBe(201);
+    const prodId = ((await prod.json()) as { data: { id: string } }).data.id;
+
+    const staging = await app.request(
+      '/',
+      jsonInit('POST', { agent: { spec: inlineSpec }, metadata: { env: 'staging' } }),
+    );
+    expect(staging.status).toBe(201);
+    const stagingId = ((await staging.json()) as { data: { id: string } }).data.id;
+
+    const filtered = await app.request('/?metadata[env]=prod&metadata[team]=platform');
+    expect(filtered.status).toBe(200);
+    const filteredIds = ListSessionsResponseSchema.parse(await filtered.json()).data.map(session => session.id);
+    expect(filteredIds).toContain(prodId);
+    expect(filteredIds).not.toContain(stagingId);
+
+    const bare = await app.request(`/?metadata=${encodeURIComponent(JSON.stringify({ env: 'prod' }))}`);
+    expect(bare.status).toBe(400);
   });
 
   it('POST get-or-create-by-external-id is idempotent and 403s for another creator', async () => {
@@ -462,6 +585,7 @@ describe('sessions HTTP agent binding', () => {
       custom: null,
       metadata: {},
       external_id: 'run-theirs',
+      source: null,
     });
     const forbidden = await app.request(
       '/api/internal/sessions/get-or-create-by-external-id',
@@ -473,7 +597,8 @@ describe('sessions HTTP agent binding', () => {
     });
   });
 
-  it('returns 404 when creating a session for a named agent the caller cannot read', async () => {
+  it('returns 404 when creating a session for a named agent the caller cannot use', async () => {
+    deniedCanAccessAgent.mockClear();
     const agent = await agentStore.createAgent({
       tenant_id: 'default',
       created_by_subject: {
@@ -505,6 +630,7 @@ describe('sessions HTTP agent binding', () => {
     );
     expect(getOrCreate.status).toBe(404);
     expect(await getOrCreate.json()).toEqual({ error: { message: `Agent not found: ${agent.name}` } });
+    expect(deniedCanAccessAgent.mock.calls.map(([input]) => input.action)).toEqual(['use', 'use']);
   });
 
   it('rejects create bodies that mix name and AgentSpec fields', async () => {

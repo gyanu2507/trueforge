@@ -1,10 +1,23 @@
 import {
   ScheduleAgentNotFoundError,
   scheduleDispatchLoop,
+  scheduleRunFailureReason,
   startScheduleRun,
 } from '../../../src/controller/scheduleDispatch';
 import type { ScheduleDispatchItem, ScheduleRunRecord } from '../../../src/db/scheduleStore';
 import { ScheduleManifestSchema } from '../../../src/schemas/schedule';
+
+describe('scheduleRunFailureReason', () => {
+  it('uses Error.message when non-empty', () => {
+    expect(scheduleRunFailureReason(new Error('executor unavailable'))).toBe('executor unavailable');
+  });
+
+  it('falls back when message is blank or value is not an Error', () => {
+    expect(scheduleRunFailureReason(new Error('   '))).toBe('Schedule run failed');
+    expect(scheduleRunFailureReason('boom')).toBe('Schedule run failed');
+    expect(scheduleRunFailureReason(null)).toBe('Schedule run failed');
+  });
+});
 
 function item(): ScheduleDispatchItem {
   return {
@@ -17,6 +30,7 @@ function item(): ScheduleDispatchItem {
       status: 'scheduled',
       created_by_subject: { subject_id: 'tester', subject_type: 'user', subject_display_name: 'tester' },
       triggered_at: null,
+      reason: null,
       created_at: '2026-08-31T00:00:00.000Z',
       updated_at: '2026-08-31T00:00:00.000Z',
     },
@@ -91,6 +105,7 @@ describe('scheduleDispatchLoop', () => {
     expect(getOrCreateByExternalId).toHaveBeenCalledWith({
       externalId: 'run-1',
       agent: { name: 'reporter' },
+      source: { type: 'schedule', id: 'sched-1', runId: 'run-1' },
     });
     expect(listTurns).toHaveBeenCalledWith('sess-1', { limit: 1 });
     expect(createTurn).toHaveBeenCalledWith('sess-1', {
@@ -154,6 +169,7 @@ describe('startScheduleRun', () => {
       external_id: 'run-1',
       created_by_subject: { subject_id: 'tester', subject_type: 'user', subject_display_name: 'tester' },
       agent: { type: 'reference', id: 'agent-1', name: 'reporter' },
+      source: { type: 'schedule', id: 'sched-1', run_id: 'run-1' },
     });
     expect(startTurn).toHaveBeenCalledWith({
       session,

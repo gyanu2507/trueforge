@@ -43,14 +43,15 @@ import { ComposerLeftSection, ComposerRightSection, ComposerSendButton } from '.
 import { ComposerShell } from '../atoms/ComposerShell.js';
 import { AgentConfigEditors } from '../atoms/draft/AgentConfigEditors.js';
 import { AgentConfigPanel, AgentConfigSection } from '../atoms/draft/AgentConfigPanel.js';
+import { AgentInstructionsDrawer } from '../atoms/draft/AgentInstructionsDrawer.js';
 import { AgentMcpEditorContent } from '../atoms/draft/AgentMcpEditorContent.js';
 import { AgentModelConfigModal } from '../atoms/draft/AgentModelConfigModal.js';
 import { AgentModelEditorContent } from '../atoms/draft/AgentModelEditorContent.js';
 import { AgentModelSettingsContent } from '../atoms/draft/AgentModelSettingsContent.js';
 import { AgentResourceConfigModal } from '../atoms/draft/AgentResourceConfigModal.js';
 import { AgentResourceEditorContent } from '../atoms/draft/AgentResourceEditorContent.js';
+import { AgentRuntimeConfigDrawer } from '../atoms/draft/AgentRuntimeConfigDrawer.js';
 import { AgentRuntimeConfigFields } from '../atoms/draft/AgentRuntimeConfigFields.js';
-import { AgentRuntimeConfigModal } from '../atoms/draft/AgentRuntimeConfigModal.js';
 import { AgentRuntimeEditorContent } from '../atoms/draft/AgentRuntimeEditorContent.js';
 import { AgentSkillsEditorContent } from '../atoms/draft/AgentSkillsEditorContent.js';
 import { DraftAgentConfigTrigger } from '../atoms/draft/DraftAgentConfigTrigger.js';
@@ -146,6 +147,7 @@ export const defaultSlots = {
   DraftAgentConfigTrigger,
   DraftCapabilitiesPanel,
   AgentConfigEditors,
+  AgentInstructionsDrawer,
   AgentModelEditorContent,
   AgentModelSettingsContent,
   AgentMcpEditorContent,
@@ -156,7 +158,7 @@ export const defaultSlots = {
   AgentConfigPanel,
   AgentConfigSection,
   AgentRuntimeConfigFields,
-  AgentRuntimeConfigModal,
+  AgentRuntimeConfigDrawer,
   AgentRuntimeEditorContent,
   DraftCompositeSelector,
   CatalogRow,

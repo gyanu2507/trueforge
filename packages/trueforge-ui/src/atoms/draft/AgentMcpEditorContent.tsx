@@ -8,6 +8,8 @@ import type { AgentSpec, ConnectorState, McpToolSelection } from '../../server/t
 import { auiButtonClass } from '../lib/buttonClasses.js';
 import { cn } from '../lib/cn.js';
 import { auiInputClass } from '../lib/inputClasses.js';
+import { useInfiniteScrollSentinel } from '../lib/useInfiniteScrollSentinel.js';
+import { Button } from '../primitives/Button.js';
 import { CatalogLogo } from '../primitives/CatalogLogo.js';
 import { Spinner } from '../primitives/Spinner.js';
 import { Switch } from '../primitives/Switch.js';
@@ -19,6 +21,8 @@ import {
   withEnabledTools,
   withPreload,
 } from './agentConfigMounts.js';
+import { useDraftCatalog } from './DraftCatalogProvider.js';
+import { connectorsWithSelectedStubs } from './mcpConnectorStubs.js';
 
 export type AgentMcpEditorContentProps = {
   spec: AgentSpec;
@@ -73,9 +77,9 @@ function selectedToolsHeaderLabel(mcpMounts: ReturnType<typeof editableMountsFro
 function ConnectNowButton({ connectorId, onConnected }: { connectorId: string; onConnected: () => Promise<void> }) {
   const { handleAuthorize, isOAuthLoading } = useMCPAuth();
   return (
-    <button
+    <Button.Primary
       type="button"
-      className={auiButtonClass({ className: 'min-w-44' })}
+      className="min-w-44"
       disabled={isOAuthLoading}
       onClick={() => {
         void handleAuthorize(connectorId, isSuccess => {
@@ -84,7 +88,7 @@ function ConnectNowButton({ connectorId, onConnected }: { connectorId: string; o
       }}
     >
       {isOAuthLoading ? 'Connecting...' : 'Connect Now'}
-    </button>
+    </Button.Primary>
   );
 }
 
@@ -102,10 +106,13 @@ export function AgentMcpEditorContent({
   onRefreshConnectors,
   onChange,
 }: AgentMcpEditorContentProps) {
+  const { connectorsHasMore, connectorsLoadMoreFailed, connectorsLoadingMore, loading, loadMoreConnectors } =
+    useDraftCatalog();
   const [toolQuery, setToolQuery] = useState('');
   const [collapsedMountIds, setCollapsedMountIds] = useState<ReadonlySet<string>>(() => new Set());
   const mcpMounts = editableMountsFromSpec(spec.mcpServers);
-  const selectedConnector = connectors.find(item => item.id === activeConnectorId);
+  const catalogConnectors = connectorsWithSelectedStubs({ connectors, selected: mcpMounts });
+  const selectedConnector = catalogConnectors.find(item => item.id === activeConnectorId);
   const activeMount = selectedConnector
     ? mcpMounts.find(item => item.id === selectedConnector.id || item.name === selectedConnector.name)
     : undefined;
@@ -113,13 +120,19 @@ export function AgentMcpEditorContent({
   const canAddActiveConnector = selectedConnector !== undefined && selectedConnector.authenticated === true;
   const enabledTools = activeMount ? enabledToolsFromMount(activeMount.value) : [];
   const normalizedQuery = query.trim().toLowerCase();
-  const filteredConnectors = connectors.filter(item =>
+  const filteredConnectors = catalogConnectors.filter(item =>
     `${item.name} ${item.description ?? ''}`.toLowerCase().includes(normalizedQuery),
   );
   const normalizedToolQuery = toolQuery.trim().toLowerCase();
   const filteredTools =
     normalizedToolQuery === '' ? tools : tools.filter(tool => tool.name.toLowerCase().includes(normalizedToolQuery));
 
+  const { listRef: connectorsListRef, sentinelRef: connectorsSentinelRef } = useInfiniteScrollSentinel({
+    enabled: true,
+    hasMore: connectorsHasMore && !connectorsLoadMoreFailed,
+    loading: connectorsLoadingMore || loading,
+    onLoadMore: loadMoreConnectors,
+  });
   const updateMount = (mountId: string, value: object) => {
     onChange({
       ...spec,
@@ -135,7 +148,7 @@ export function AgentMcpEditorContent({
   };
 
   const openMountConnector = (mount: (typeof mcpMounts)[number]) => {
-    const match = connectors.find(item => item.id === mount.id || item.name === mount.name);
+    const match = catalogConnectors.find(item => item.id === mount.id || item.name === mount.name);
     onSelectConnector(match?.id ?? mount.id);
   };
 
@@ -182,10 +195,10 @@ export function AgentMcpEditorContent({
             value={query}
             onChange={event => onQueryChange(event.target.value)}
             placeholder="Search MCP"
-            className={auiInputClass('h-9 w-full pl-7')}
+            className={auiInputClass('h-8 w-full pl-7')}
           />
         </label>
-        <div className="min-h-0 flex-1 overflow-y-auto p-2">
+        <div ref={connectorsListRef} className="min-h-0 flex-1 overflow-y-auto p-2">
           {filteredConnectors.map(connector => {
             const mounted = mcpMounts.some(item => item.id === connector.id || item.name === connector.name);
             const active = connector.id === activeConnectorId;
@@ -214,6 +227,24 @@ export function AgentMcpEditorContent({
               </button>
             );
           })}
+          {connectorsHasMore ? (
+            <div
+              ref={connectorsLoadMoreFailed ? undefined : connectorsSentinelRef}
+              className="flex h-8 items-center justify-center"
+            >
+              {connectorsLoadMoreFailed ? (
+                <button
+                  type="button"
+                  className={auiButtonClass({ variant: 'ghost', size: 'small' })}
+                  onClick={loadMoreConnectors}
+                >
+                  Retry loading connectors
+                </button>
+              ) : connectorsLoadingMore ? (
+                <span className="text-text-secondary text-[0.625rem]">Loading…</span>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -231,14 +262,14 @@ export function AgentMcpEditorContent({
                 OR
                 <span className="bg-border h-px flex-1" />
               </div>
-              <button
+              <Button.Secondary
                 type="button"
-                className={auiButtonClass({ variant: 'outline', className: 'min-w-44' })}
+                className="min-w-44"
                 disabled={activeMount !== undefined}
                 onClick={connectDuringChat}
               >
                 Connect During Chat
-              </button>
+              </Button.Secondary>
             </div>
           ) : (
             <>
@@ -278,7 +309,7 @@ export function AgentMcpEditorContent({
                   value={toolQuery}
                   onChange={event => setToolQuery(event.target.value)}
                   placeholder="Search Tools"
-                  className={auiInputClass('h-9 w-full pl-7')}
+                  className={auiInputClass('h-8 w-full pl-7')}
                 />
               </label>
               <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
@@ -290,13 +321,9 @@ export function AgentMcpEditorContent({
                 {toolsError ? (
                   <div className="p-3">
                     <p className="text-failure-bg text-sm">{toolsError}</p>
-                    <button
-                      type="button"
-                      className={auiButtonClass({ variant: 'secondary', size: 'sm', className: 'mt-2' })}
-                      onClick={onRetryTools}
-                    >
+                    <Button.Secondary type="button" size="small" className="mt-2" onClick={onRetryTools}>
                       Retry
-                    </button>
+                    </Button.Secondary>
                   </div>
                 ) : null}
                 {!toolsLoading
@@ -408,7 +435,7 @@ export function AgentMcpEditorContent({
                     {selected === 'all' ? (
                       <button
                         type="button"
-                        className="text-text-secondary hover:bg-ghost-button-hover flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 pl-7 text-left text-[11px] font-medium tracking-wide uppercase"
+                        className="text-text-secondary hover:bg-ghost-button-hover flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 pl-7 text-left text-[0.6875rem] font-medium tracking-wide uppercase"
                         onClick={() => openMountConnector(mount)}
                       >
                         <Icon name="wrench" className="size-3 shrink-0" />
@@ -420,7 +447,7 @@ export function AgentMcpEditorContent({
                           key={`${mount.id}:${toolName}`}
                           type="button"
                           aria-label={`Open ${mount.name} for ${toolName}`}
-                          className="text-text-primary hover:bg-ghost-button-hover flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 pl-7 text-left text-[11px]"
+                          className="text-text-primary hover:bg-ghost-button-hover flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 pl-7 text-left text-[0.6875rem]"
                           onClick={() => openMountConnector(mount)}
                         >
                           <Icon name="wrench" className="text-text-secondary size-3 shrink-0" />
@@ -428,7 +455,7 @@ export function AgentMcpEditorContent({
                         </button>
                       ))
                     ) : (
-                      <p className="text-text-secondary px-2 py-1.5 pl-7 text-[11px]">No tools selected.</p>
+                      <p className="text-text-secondary px-2 py-1.5 pl-7 text-[0.6875rem]">No tools selected.</p>
                     )}
                   </details>
                 );

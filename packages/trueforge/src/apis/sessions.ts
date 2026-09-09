@@ -53,9 +53,10 @@ import {
 } from '../runtime/generateSessionInstructions';
 import { executorFromTurnId } from '../runtime/peeringIds';
 import { getModelDetails, validateAgentSpec } from '../runtime/sessionResources';
-import { isSessionAgentNameRef, type Session } from '../schemas/session';
+import { honoQueriesToRecord } from '../schemas/deepObjectQuery';
+import { isSessionAgentNameRef, parseListSessionsQuery, type Session } from '../schemas/session';
 import { newId } from '../utils/id';
-import { agentIfAccessible } from './agentAccess';
+import { agentIfAccessible, canReadAgentBoundResource, resolveManagedAgentIds } from './agentAccess';
 
 /** Request-reply path a replica serves to cancel a turn it owns. */
 export const SESSIONS_CANCEL_PATH = 'sessions/cancel';
@@ -78,6 +79,7 @@ export function toWireSession(record: SessionRecord): Session {
     updated_at: record.updated_at.toISOString(),
     metrics: record.metrics,
     metadata: record.metadata,
+    source: record.source,
   };
 }
 
@@ -89,7 +91,7 @@ export interface SessionsRouterDeps {
   resolveMcpServerStore: (c: Context) => IMcpServerStore;
   skillStore: ISkillStore;
   resolveAgentStore: (c: Context) => IAgentStore;
-  sandboxProviderStore: ISandboxProviderStore;
+  resolveSandboxProviderStore: (c: Context) => ISandboxProviderStore;
   redis?: RedisClientType | undefined;
   requestReplyRouter: RequestReplyRouter;
   resolveRequestContext: ResolveRequestContext;
@@ -228,7 +230,7 @@ async function freezeTurnIgnoringMissing(
 
 const FORBIDDEN_SESSION_ACCESS = 'Only the session creator can access this session';
 
-function checkSessionAccess({
+function isSessionOwner({
   subject_id,
   created_by_subject,
 }: {
@@ -245,7 +247,7 @@ type InternalSessionsRouterDeps = Pick<
   | 'resolveMcpServerStore'
   | 'skillStore'
   | 'resolveAgentStore'
-  | 'sandboxProviderStore'
+  | 'resolveSandboxProviderStore'
   | 'resolveRequestContext'
   | 'authorizer'
 >;
@@ -263,10 +265,13 @@ function createGetOrCreateSessionByExternalIdHandler(
     });
     if (existing !== undefined) {
       if (
-        !checkSessionAccess({
-          subject_id: requestContext.subject.id,
-          created_by_subject: existing.record.created_by_subject,
-        })
+        !(await canReadAgentBoundResource({
+          store: deps.resolveAgentStore(c),
+          context: requestContext,
+          authorizer: deps.authorizer,
+          agent_id: existing.record.agent.type === 'reference' ? existing.record.agent.id : undefined,
+          created_by_subject_id: existing.record.created_by_subject.subject_id,
+        }))
       ) {
         return c.json({ error: { message: FORBIDDEN_SESSION_ACCESS } }, 403);
       }
@@ -278,7 +283,7 @@ function createGetOrCreateSessionByExternalIdHandler(
       const named = await agentIfAccessible({
         authorizer: deps.authorizer,
         context: requestContext,
-        action: 'read',
+        action: 'use',
         agent: await deps.resolveAgentStore(c).getAgent({
           tenant_id: requestContext.tenant_id,
           name: body.agent.name,
@@ -295,7 +300,7 @@ function createGetOrCreateSessionByExternalIdHandler(
         modelProviderStore: deps.resolveModelProviderStore(c),
         mcpServerStore: deps.resolveMcpServerStore(c),
         skillStore: deps.skillStore,
-        sandboxProviderStore: deps.sandboxProviderStore,
+        sandboxProviderStore: deps.resolveSandboxProviderStore(c),
       });
       agent = { type: 'inline', spec: body.agent.spec };
     }
@@ -305,13 +310,17 @@ function createGetOrCreateSessionByExternalIdHandler(
       external_id: body.external_id,
       created_by_subject: createdBySubjectFromRequestContext(requestContext),
       agent,
+      source: body.source ?? null,
     });
     if (
       !created &&
-      !checkSessionAccess({
-        subject_id: requestContext.subject.id,
-        created_by_subject: session.record.created_by_subject,
-      })
+      !(await canReadAgentBoundResource({
+        store: deps.resolveAgentStore(c),
+        context: requestContext,
+        authorizer: deps.authorizer,
+        agent_id: session.record.agent.type === 'reference' ? session.record.agent.id : undefined,
+        created_by_subject_id: session.record.created_by_subject.subject_id,
+      }))
     ) {
       return c.json({ error: { message: FORBIDDEN_SESSION_ACCESS } }, 403);
     }
@@ -337,7 +346,7 @@ export function createSessionsRouter(deps: SessionsRouterDeps) {
       const agent = await agentIfAccessible({
         authorizer: deps.authorizer,
         context: requestContext,
-        action: 'read',
+        action: 'use',
         agent: await deps.resolveAgentStore(c).getAgent({
           tenant_id: requestContext.tenant_id,
           name: body.agent.name,
@@ -363,7 +372,7 @@ export function createSessionsRouter(deps: SessionsRouterDeps) {
       modelProviderStore: deps.resolveModelProviderStore(c),
       mcpServerStore: deps.resolveMcpServerStore(c),
       skillStore: deps.skillStore,
-      sandboxProviderStore: deps.sandboxProviderStore,
+      sandboxProviderStore: deps.resolveSandboxProviderStore(c),
     });
     const session = await deps.sessions.create({
       tenant_id: requestContext.tenant_id,
@@ -387,10 +396,13 @@ export function createSessionsRouter(deps: SessionsRouterDeps) {
       return c.json({ error: { message: `Session not found: ${sessionId}` } }, 404);
     }
     if (
-      !checkSessionAccess({
-        subject_id: requestContext.subject.id,
-        created_by_subject: record.created_by_subject,
-      })
+      !(await canReadAgentBoundResource({
+        store: deps.resolveAgentStore(c),
+        context: requestContext,
+        authorizer: deps.authorizer,
+        agent_id: record.agent.type === 'reference' ? record.agent.id : undefined,
+        created_by_subject_id: record.created_by_subject.subject_id,
+      }))
     ) {
       return c.json({ error: { message: FORBIDDEN_SESSION_ACCESS } }, 403);
     }
@@ -409,7 +421,7 @@ export function createSessionsRouter(deps: SessionsRouterDeps) {
       return c.body(null, 204);
     }
     if (
-      !checkSessionAccess({
+      !isSessionOwner({
         subject_id: requestContext.subject.id,
         created_by_subject: record.created_by_subject,
       })
@@ -435,7 +447,7 @@ export function createSessionsRouter(deps: SessionsRouterDeps) {
       return c.json({ error: { message: `Session not found: ${sessionId}` } }, 404);
     }
     if (
-      !checkSessionAccess({
+      !isSessionOwner({
         subject_id: requestContext.subject.id,
         created_by_subject: existing.created_by_subject,
       })
@@ -451,7 +463,7 @@ export function createSessionsRouter(deps: SessionsRouterDeps) {
         modelProviderStore: deps.resolveModelProviderStore(c),
         mcpServerStore: deps.resolveMcpServerStore(c),
         skillStore: deps.skillStore,
-        sandboxProviderStore: deps.sandboxProviderStore,
+        sandboxProviderStore: deps.resolveSandboxProviderStore(c),
       });
     }
     try {
@@ -482,18 +494,31 @@ export function createSessionsRouter(deps: SessionsRouterDeps) {
   };
 
   const listSessionsHandler: RouteHandler<typeof listSessionsRoute> = async c => {
-    const query = c.req.valid('query');
+    const query = parseListSessionsQuery(honoQueriesToRecord(c.req.queries()));
     const requestContext = deps.resolveRequestContext(c);
     try {
+      const managedAgentIds = query.created_by_me
+        ? []
+        : await resolveManagedAgentIds({
+            store: deps.resolveAgentStore(c),
+            context: requestContext,
+            authorizer: deps.authorizer,
+          });
       const { data, pagination } = await deps.sessionStore.listSessions({
         agent_id: query.agent_id,
-        created_by_subject_id: requestContext.subject.id,
+        created_by_or_agent_ids: {
+          created_by_subject_id: requestContext.subject.id,
+          agent_ids: managedAgentIds,
+        },
         tenant_id: requestContext.tenant_id,
+        metadata: query.metadata,
         limit: query.limit,
         order: query.order,
         page_token: query.page_token,
         start_timestamp: query.start_timestamp,
         end_timestamp: query.end_timestamp,
+        source_type: query.source_type,
+        source_id: query.source_id,
       });
       return c.json({ data: data.map(toWireSession), pagination }, 200);
     } catch (error) {
@@ -515,7 +540,7 @@ export function createSessionsRouter(deps: SessionsRouterDeps) {
       return c.json({ error: { message: `Session not found: ${sessionId}` } }, 404);
     }
     if (
-      !checkSessionAccess({
+      !isSessionOwner({
         subject_id: requestContext.subject.id,
         created_by_subject: session.record.created_by_subject,
       })
@@ -543,10 +568,13 @@ export function createSessionsRouter(deps: SessionsRouterDeps) {
       return c.json({ error: { message: `Session not found: ${sessionId}` } }, 404);
     }
     if (
-      !checkSessionAccess({
-        subject_id: requestContext.subject.id,
-        created_by_subject: session.record.created_by_subject,
-      })
+      !(await canReadAgentBoundResource({
+        store: deps.resolveAgentStore(c),
+        context: requestContext,
+        authorizer: deps.authorizer,
+        agent_id: session.record.agent.type === 'reference' ? session.record.agent.id : undefined,
+        created_by_subject_id: session.record.created_by_subject.subject_id,
+      }))
     ) {
       return c.json({ error: { message: FORBIDDEN_SESSION_ACCESS } }, 403);
     }
