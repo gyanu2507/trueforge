@@ -16,6 +16,7 @@ vi.mock('@truefoundry/assistant-ui-runtime', () => ({
     }),
   useTrueFoundryCancel: () => vi.fn(),
   useTrueFoundryToolResponses: () => ({ pending: [] }),
+  useTrueFoundryApprovals: () => ({ pending: [] }),
   useTrueFoundryRespondToToolApproval: () => vi.fn(),
   useTrueFoundryMcpAuth: () => ({ pending: [], connect: vi.fn(), continue: vi.fn() }),
   useTrueFoundryHistoryPagination: () => ({
@@ -175,7 +176,7 @@ describe('TrueForgeUI', () => {
     });
   });
 
-  it('refetches composer data when starting a new chat', async () => {
+  it('keeps composer catalogs cached when starting a new chat', async () => {
     const getCapabilities = vi
       .fn()
       .mockResolvedValueOnce({ data: { sandbox: { enabled: true }, skill: { enabled: true } } })
@@ -208,9 +209,9 @@ describe('TrueForgeUI', () => {
 
     await waitFor(() => {
       expect(getCapabilities).toHaveBeenCalledTimes(2);
-      expect(getModels).toHaveBeenCalledTimes(2);
-      expect(getSkills).toHaveBeenCalledTimes(2);
-      expect(getMcp).toHaveBeenCalledTimes(2);
+      expect(getModels).toHaveBeenCalledTimes(1);
+      expect(getSkills).toHaveBeenCalledTimes(1);
+      expect(getMcp).toHaveBeenCalledTimes(1);
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Tools (0)' }));
@@ -218,7 +219,7 @@ describe('TrueForgeUI', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('Select Sandbox first');
   });
 
-  it('shares catalog data with the Save Agent stacked editors', async () => {
+  it('keeps configuration editors out of Save Agent', async () => {
     const getModels = vi.fn(async () => [
       {
         id: 'openai-main/gpt-4.1',
@@ -241,17 +242,10 @@ describe('TrueForgeUI', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Start new agent' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Save Agent' }));
     const saveDialog = await screen.findByRole('dialog', { name: 'Save agent' });
-    fireEvent.click(within(saveDialog).getByRole('button', { name: 'Edit Model' }));
-
-    const modelDialog = document.querySelector('dialog[aria-label="Edit model"]');
-    if (!(modelDialog instanceof HTMLDialogElement)) throw new Error('expected stacked model dialog');
-    expect(await within(modelDialog).findByRole('option', { name: /gpt-4.1/ })).toBeInTheDocument();
-    fireEvent.click(within(modelDialog).getByRole('button', { name: 'Close' }));
-
-    fireEvent.click(within(saveDialog).getByRole('button', { name: 'Edit Connectors' }));
-    const mcpDialog = document.querySelector('dialog[aria-label="Select MCP Tools"]');
-    if (!(mcpDialog instanceof HTMLDialogElement)) throw new Error('expected stacked MCP dialog');
-    expect(await within(mcpDialog).findByText('GitHub')).toBeInTheDocument();
+    expect(within(saveDialog).getByLabelText('Agent name')).toBeInTheDocument();
+    expect(within(saveDialog).queryByLabelText('Description')).not.toBeInTheDocument();
+    expect(within(saveDialog).queryByRole('button', { name: 'Edit Model' })).not.toBeInTheDocument();
+    expect(within(saveDialog).queryByRole('button', { name: 'Edit Connectors' })).not.toBeInTheDocument();
     expect(getModels).toHaveBeenCalled();
     expect(getMcp).toHaveBeenCalled();
     expect(getSkills).toHaveBeenCalled();
@@ -435,7 +429,7 @@ describe('SidebarLayout', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Navigation' }));
 
     const drawer = screen.getByRole('dialog', { name: 'Navigation' });
-    expect(drawer).toHaveClass('w-18');
+    expect(drawer).toHaveClass('w-20');
     expect(within(drawer).getByAltText('Acme')).toHaveAttribute('src', '/acme.svg');
     expect(within(drawer).queryByText('Acme')).not.toBeInTheDocument();
     expect(within(drawer).getByRole('button', { name: 'Start new chat' })).toBeInTheDocument();
@@ -512,6 +506,50 @@ describe('SidebarLayout', () => {
     expect(screen.queryByRole('button', { name: /^(Collapse|Expand) sidebar$/ })).not.toBeInTheDocument();
   });
 
+  it('keeps recent history visible when a named chat loads in the same page', async () => {
+    function OpenNamedChatButton() {
+      const shell = useShellMode();
+      return (
+        <button type="button" onClick={() => shell.selectLibraryAgent({ isMutable: false, agentName: 'named-agent' })}>
+          Open named chat
+        </button>
+      );
+    }
+
+    render(
+      <SlotsProvider>
+        <ServerProvider server={mockServer(stubCatalog)}>
+          <ShellModeProvider>
+            <AgentConfigInstructionsProvider>
+              <RuntimeHarness messages={[]}>
+                <OpenNamedChatButton />
+                <div className="h-96">
+                  <SidebarLayout />
+                </div>
+              </RuntimeHarness>
+            </AgentConfigInstructionsProvider>
+          </ShellModeProvider>
+        </ServerProvider>
+      </SlotsProvider>,
+    );
+
+    const recentChats = screen.getByRole('complementary', { name: 'Recent chats' });
+    expect(recentChats).toHaveClass('hidden', 'md:flex');
+    expect(recentChats.parentElement?.previousElementSibling?.tagName).toBe('HEADER');
+    expect(screen.getAllByText('New Chat')).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start new agent' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('complementary', { name: 'Recent chats' })).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start new chat' }));
+    expect(await screen.findByRole('complementary', { name: 'Recent chats' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open named chat' }));
+    expect(await screen.findByRole('complementary', { name: 'Recent chats' })).toBeInTheDocument();
+  });
+
   it('highlights New Chat, New Agent, and Settings when selected', async () => {
     render(
       <SlotsProvider theme={{ brand: { mode: 'icon-title', name: 'Acme' } }}>
@@ -547,7 +585,7 @@ describe('SidebarLayout', () => {
     expect(chatColumn?.querySelector('header')).toHaveClass('min-h-14');
     expect(screen.queryByRole('button', { name: 'Agent config' })).not.toBeInTheDocument();
 
-    const [settingsButton] = screen.getAllByRole('button', { name: 'Settings' });
+    const [settingsButton] = await screen.findAllByRole('button', { name: 'Settings' });
     if (settingsButton === undefined) {
       throw new Error('Expected settings button');
     }
@@ -574,7 +612,7 @@ describe('SidebarLayout', () => {
       </SlotsProvider>,
     );
 
-    expect(screen.getAllByRole('button', { name: 'Settings' })).toHaveLength(1);
+    expect(await screen.findAllByRole('button', { name: 'Settings' })).toHaveLength(1);
     expect(await screen.findAllByRole('button', { name: 'Agents' })).not.toHaveLength(0);
     const [themeButton] = screen.getAllByRole('button', { name: /Switch to (light|dark) theme/ });
     if (themeButton === undefined) {
@@ -597,7 +635,7 @@ describe('SidebarLayout', () => {
         </ServerProvider>
       </SlotsProvider>,
     );
-    expect(screen.getAllByRole('button', { name: 'Settings' })).toHaveLength(1);
+    expect(await screen.findAllByRole('button', { name: 'Settings' })).toHaveLength(1);
     const [settingsButton] = screen.getAllByRole('button', { name: 'Settings' });
     if (settingsButton === undefined) {
       throw new Error('Expected settings button');
@@ -784,7 +822,7 @@ describe('layout slot overrides', () => {
       expect(before.length).toBeGreaterThan(0);
       const beforeNode = before[0];
 
-      fireEvent.click(screen.getAllByRole('button', { name: 'Settings' })[0]!);
+      fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]!);
       // SettingsBuilder is lazy-loaded behind Suspense in the layout.
       expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument();
 
