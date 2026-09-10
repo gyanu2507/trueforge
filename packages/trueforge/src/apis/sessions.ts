@@ -607,7 +607,7 @@ export function createSessionsRouter(deps: SessionsRouterDeps) {
       return c.json({ error: { message: `Session not found: ${sessionId}` } }, 404);
     }
     if (
-      !checkSessionAccess({
+      !isSessionOwner({
         subject_id: requestContext.subject.id,
         created_by_subject: session.record.created_by_subject,
       })
